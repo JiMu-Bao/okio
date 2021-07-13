@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package okio.zipfilesystem
+package okio.internal
 
 import okio.BufferedSource
 import okio.ExperimentalFileSystem
@@ -23,6 +23,7 @@ import okio.FileSystem
 import okio.IOException
 import okio.Path
 import okio.Path.Companion.toPath
+import okio.ZipFileSystem
 import okio.buffer
 import java.util.Calendar
 import java.util.GregorianCalendar
@@ -54,86 +55,106 @@ private const val HEADER_ID_EXTENDED_TIMESTAMP = 0x5455
 /**
  * Opens the file at [zipPath] for use as a file system. This uses UTF-8 to comments and names in
  * the zip file.
+ *
+ * @param predicate a function that returns false for entries that should be omitted from the file
+ *     system.
  */
 @Throws(IOException::class)
 @ExperimentalFileSystem
-internal fun open(zipPath: Path, fileSystem: FileSystem): ZipFileSystem {
-  val source = fileSystem.source(zipPath).buffer()
-  val cursor = source.cursor()
-    ?: throw IOException("cannot open zip: file doesn't implement a random-access cursor")
+internal fun openZip(
+  zipPath: Path,
+  fileSystem: FileSystem,
+  predicate: (ZipEntry) -> Boolean = { true }
+): ZipFileSystem {
+  fileSystem.openReadOnly(zipPath).use { fileHandle ->
 
-  val firstFileSignature = source.readIntLe()
-  if (firstFileSignature != LOCAL_FILE_HEADER_SIGNATURE) {
-    if (firstFileSignature == END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
-      throw IOException("unsupported zip: empty")
-    }
-    throw IOException(
-      "not a zip: expected ${LOCAL_FILE_HEADER_SIGNATURE.hex} but was ${firstFileSignature.hex}"
-    )
-  }
-
-  // Scan backwards from the end of the file looking for the END_OF_CENTRAL_DIRECTORY_SIGNATURE. If
-  // this file has no comment we'll see it on the first attempt; otherwise we have to go backwards
-  // byte-by-byte until we reach it. (The number of bytes scanned will equal the comment size).
-  var scanOffset = cursor.size() - 22 // end of central directory record size is 22 bytes.
-  if (scanOffset < 0L) {
-    throw IOException("not a zip: size=${cursor.size()}")
-  }
-  val stopOffset = maxOf(scanOffset - 65_536L, 0L)
-  val eocdOffset: Long
-  while (true) {
-    cursor.seek(scanOffset)
-    if (source.readIntLe() == END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
-      eocdOffset = scanOffset
-      break
-    }
-
-    scanOffset--
-    if (scanOffset < stopOffset) {
-      throw IOException("not a zip: end of central directory signature not found")
-    }
-  }
-
-  var record = source.readEocdRecord()
-  val comment = source.readUtf8(record.commentByteCount.toLong())
-
-  // If this is a zip64, read a zip64 central directory record.
-  val zip64LocatorOffset = eocdOffset - 20 // zip64 end of central directory locator is 20 bytes.
-  if (zip64LocatorOffset > 0L) {
-    cursor.seek(zip64LocatorOffset)
-    if (source.readIntLe() == ZIP64_LOCATOR_SIGNATURE) {
-      val diskWithCentralDir = source.readIntLe()
-      val zip64EocdRecordOffset = source.readLongLe()
-      val numDisks = source.readIntLe()
-      if (numDisks != 1 || diskWithCentralDir != 0) {
-        throw IOException("unsupported zip: spanned")
-      }
-      cursor.seek(zip64EocdRecordOffset)
-      val zip64EocdSignature = source.readIntLe()
-      if (zip64EocdSignature != ZIP64_EOCD_RECORD_SIGNATURE) {
+    fileHandle.source().buffer().use { source ->
+      val firstFileSignature = source.readIntLe()
+      if (firstFileSignature != LOCAL_FILE_HEADER_SIGNATURE) {
+        if (firstFileSignature == END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
+          throw IOException("unsupported zip: empty")
+        }
         throw IOException(
-          "bad zip: expected ${ZIP64_EOCD_RECORD_SIGNATURE.hex} but was ${zip64EocdSignature.hex}"
+          "not a zip: expected ${LOCAL_FILE_HEADER_SIGNATURE.hex} but was ${firstFileSignature.hex}"
         )
       }
-      record = source.readZip64EocdRecord(record)
     }
-  }
 
-  // Seek to the first central directory entry and read all of the entries.
-  cursor.seek(record.centralDirectoryOffset)
-  val entries = mutableListOf<ZipEntry>()
-  for (i in 0 until record.entryCount) {
-    val newEntry = source.readEntry()
-    if (newEntry.offset >= record.centralDirectoryOffset) {
-      throw IOException("bad zip: local file header offset >= central directory offset")
+    // Scan backwards from the end of the file looking for the END_OF_CENTRAL_DIRECTORY_SIGNATURE.
+    // If this file has no comment we'll see it on the first attempt; otherwise we have to go
+    // backwards byte-by-byte until we reach it. (The number of bytes scanned will equal the comment
+    // size).
+    var scanOffset = fileHandle.size() - 22 // end of central directory record size is 22 bytes.
+    if (scanOffset < 0L) {
+      throw IOException("not a zip: size=${fileHandle.size()}")
     }
-    entries += newEntry
+    val stopOffset = maxOf(scanOffset - 65_536L, 0L)
+    val eocdOffset: Long
+    var record: EocdRecord
+    val comment: String
+    while (true) {
+      val source = fileHandle.source(scanOffset).buffer()
+      try {
+        if (source.readIntLe() == END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
+          eocdOffset = scanOffset
+          record = source.readEocdRecord()
+          comment = source.readUtf8(record.commentByteCount.toLong())
+          break
+        }
+      } finally {
+        source.close()
+      }
+
+      scanOffset--
+      if (scanOffset < stopOffset) {
+        throw IOException("not a zip: end of central directory signature not found")
+      }
+    }
+
+    // If this is a zip64, read a zip64 central directory record.
+    val zip64LocatorOffset = eocdOffset - 20 // zip64 end of central directory locator is 20 bytes.
+    if (zip64LocatorOffset > 0L) {
+      fileHandle.source(zip64LocatorOffset).buffer().use { zip64LocatorSource ->
+        if (zip64LocatorSource.readIntLe() == ZIP64_LOCATOR_SIGNATURE) {
+          val diskWithCentralDir = zip64LocatorSource.readIntLe()
+          val zip64EocdRecordOffset = zip64LocatorSource.readLongLe()
+          val numDisks = zip64LocatorSource.readIntLe()
+          if (numDisks != 1 || diskWithCentralDir != 0) {
+            throw IOException("unsupported zip: spanned")
+          }
+          fileHandle.source(zip64EocdRecordOffset).buffer().use { zip64EocdSource ->
+            val zip64EocdSignature = zip64EocdSource.readIntLe()
+            if (zip64EocdSignature != ZIP64_EOCD_RECORD_SIGNATURE) {
+              throw IOException(
+                "bad zip: expected ${ZIP64_EOCD_RECORD_SIGNATURE.hex} " +
+                  "but was ${zip64EocdSignature.hex}"
+              )
+            }
+            record = zip64EocdSource.readZip64EocdRecord(record)
+          }
+        }
+      }
+    }
+
+    // Seek to the first central directory entry and read all of the entries.
+    val entries = mutableListOf<ZipEntry>()
+    fileHandle.source(record.centralDirectoryOffset).buffer().use { source ->
+      for (i in 0 until record.entryCount) {
+        val entry = source.readEntry()
+        if (entry.offset >= record.centralDirectoryOffset) {
+          throw IOException("bad zip: local file header offset >= central directory offset")
+        }
+        if (predicate(entry)) {
+          entries += entry
+        }
+      }
+    }
+
+    // Organize the entries into a tree.
+    val index = buildIndex(entries)
+
+    return ZipFileSystem(zipPath, fileSystem, index, comment)
   }
-
-  // Organize the entries into a tree.
-  val index = buildIndex(entries)
-
-  return ZipFileSystem(zipPath, fileSystem, index, comment)
 }
 
 /**
@@ -146,9 +167,10 @@ private fun buildIndex(entries: List<ZipEntry>): Map<Path, ZipEntry> {
 
   // Iterate in sorted order so each path is preceded by its parent.
   for (entry in entries.sortedBy { it.canonicalPath }) {
-    if (result.put(entry.canonicalPath, entry) != null) {
-      throw IOException("bad zip: duplicate path: ${entry.canonicalPath}")
-    }
+    // Note that this may clobber an existing element in the map. For consistency with java.util.zip
+    // and java.nio.file.FileSystem, this prefers the last-encountered element.
+    val replaced = result.put(entry.canonicalPath, entry)
+    if (replaced != null) continue
 
     // Make sure this parent directories exist all the way up to the file system root.
     var child = entry

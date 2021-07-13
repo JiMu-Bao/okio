@@ -33,25 +33,55 @@ package okio
  * produced by a file handle are not safe for concurrent use.
  */
 @ExperimentalFileSystem
-abstract class FileHandle : Closeable {
+abstract class FileHandle(
   /**
-   * True once the file handle is closed. Resources should be released with [closeInternal] once
+   * True if this handle supports both reading and writing. If this is false all write operations
+   * including [write], [sink], [resize], and [flush] will all throw [IllegalStateException] if
+   * called.
+   */
+  val readWrite: Boolean
+) : Closeable {
+  /**
+   * True once the file handle is closed. Resources should be released with [protectedClose] once
    * this is true and [openStreamCount] is 0.
    */
   private var closed = false
 
   /**
    * Reference count of the number of open sources and sinks on this file handle. Resources should
-   * be released with [closeInternal] once this is 0 and [closed] is true.
+   * be released with [protectedClose] once this is 0 and [closed] is true.
    */
   private var openStreamCount = 0
 
   /**
-   * Removes at least 1, and up to [byteCount] bytes from this and appends them to [sink]. Returns
-   * the number of bytes read, or -1 if this file is exhausted.
+   * Reads at least 1, and up to [byteCount] bytes from this starting at [fileOffset] and copies
+   * them to [array] at [arrayOffset]. Returns the number of bytes read, or -1 if [fileOffset]
+   * equals [size].
    */
   @Throws(IOException::class)
-  abstract fun read(offset: Long, sink: Buffer, byteCount: Long): Long
+  fun read(
+    fileOffset: Long,
+    array: ByteArray,
+    arrayOffset: Int,
+    byteCount: Int
+  ): Int {
+    synchronized(this) {
+      check(!closed) { "closed" }
+    }
+    return protectedRead(fileOffset, array, arrayOffset, byteCount)
+  }
+
+  /**
+   * Reads at least 1, and up to [byteCount] bytes from this starting at [fileOffset] and appends
+   * them to [sink]. Returns the number of bytes read, or -1 if [fileOffset] equals [size].
+   */
+  @Throws(IOException::class)
+  fun read(fileOffset: Long, sink: Buffer, byteCount: Long): Long {
+    synchronized(this) {
+      check(!closed) { "closed" }
+    }
+    return readNoCloseCheck(fileOffset, sink, byteCount)
+  }
 
   /**
    * Returns the total number of bytes in the file. This will change if the file size changes.
@@ -59,25 +89,64 @@ abstract class FileHandle : Closeable {
   @Throws(IOException::class)
   abstract fun size(): Long
 
-  /** Removes [byteCount] bytes from [source] and writes them to this at [offset]. */
+  /**
+   * Changes the number of bytes in this file to [size]. This will remove bytes from the end if the
+   * new size is smaller. It will add `0` bytes to the end if it is larger.
+   */
   @Throws(IOException::class)
-  abstract fun write(offset: Long, source: Buffer, byteCount: Long)
+  fun resize(size: Long) {
+    check(readWrite) { "file handle is read-only" }
+    synchronized(this) {
+      check(!closed) { "closed" }
+    }
+    return protectedResize(size)
+  }
+
+  /** Reads [byteCount] bytes from [array] and writes them to this at [fileOffset]. */
+  fun write(
+    fileOffset: Long,
+    array: ByteArray,
+    arrayOffset: Int,
+    byteCount: Int
+  ) {
+    check(readWrite) { "file handle is read-only" }
+    synchronized(this) {
+      check(!closed) { "closed" }
+    }
+    return protectedWrite(fileOffset, array, arrayOffset, byteCount)
+  }
+
+  /** Removes [byteCount] bytes from [source] and writes them to this at [fileOffset]. */
+  @Throws(IOException::class)
+  fun write(fileOffset: Long, source: Buffer, byteCount: Long) {
+    check(readWrite) { "file handle is read-only" }
+    synchronized(this) {
+      check(!closed) { "closed" }
+    }
+    writeNoCloseCheck(fileOffset, source, byteCount)
+  }
 
   /** Pushes all buffered bytes to their final destination. */
   @Throws(IOException::class)
-  abstract fun flush()
+  fun flush() {
+    check(readWrite) { "file handle is read-only" }
+    synchronized(this) {
+      check(!closed) { "closed" }
+    }
+    return protectedFlush()
+  }
 
   /**
-   * Returns a source that reads from this starting at [offset]. The returned source must be closed
-   * when it is no longer needed.
+   * Returns a source that reads from this starting at [fileOffset]. The returned source must be
+   * closed when it is no longer needed.
    */
   @Throws(IOException::class)
-  fun source(offset: Long = 0L): Source {
+  fun source(fileOffset: Long = 0L): Source {
     synchronized(this) {
       check(!closed) { "closed" }
       openStreamCount++
     }
-    return FileHandleSource(this, offset)
+    return FileHandleSource(this, fileOffset)
   }
 
   /**
@@ -98,21 +167,56 @@ abstract class FileHandle : Closeable {
     require(source is FileHandleSource && source.fileHandle === this) {
       "source was not created by this FileHandle"
     }
+    check(!source.closed) { "closed" }
 
     return source.position - bufferSize
   }
 
   /**
-   * Returns a sink that writes to this starting at [offset]. The returned sink must be closed when
-   * it is no longer needed.
+   * Change the position of [source] in the file to [position]. The argument [source] must be either
+   * a source produced by this file handle, or a [BufferedSource] that directly wraps such a source.
+   * If the parameter is a [BufferedSource], it will skip or clear buffered bytes.
    */
   @Throws(IOException::class)
-  fun sink(offset: Long = 0L): Sink {
+  fun reposition(source: Source, position: Long) {
+    if (source is RealBufferedSource) {
+      val fileHandleSource = source.source
+      require(fileHandleSource is FileHandleSource && fileHandleSource.fileHandle === this) {
+        "source was not created by this FileHandle"
+      }
+      check(!fileHandleSource.closed) { "closed" }
+
+      val bufferSize = source.buffer.size
+      val toSkip = position - (fileHandleSource.position - bufferSize)
+      if (toSkip in 0L until bufferSize) {
+        // The new position requires only a buffer change.
+        source.skip(toSkip)
+      } else {
+        // The new position doesn't share data with the current buffer.
+        source.buffer.clear()
+        fileHandleSource.position = position
+      }
+    } else {
+      require(source is FileHandleSource && source.fileHandle === this) {
+        "source was not created by this FileHandle"
+      }
+      check(!source.closed) { "closed" }
+      source.position = position
+    }
+  }
+
+  /**
+   * Returns a sink that writes to this starting at [fileOffset]. The returned sink must be closed
+   * when it is no longer needed.
+   */
+  @Throws(IOException::class)
+  fun sink(fileOffset: Long = 0L): Sink {
+    check(readWrite) { "file handle is read-only" }
     synchronized(this) {
       check(!closed) { "closed" }
       openStreamCount++
     }
-    return FileHandleSink(this, offset)
+    return FileHandleSink(this, fileOffset)
   }
 
   /**
@@ -142,19 +246,71 @@ abstract class FileHandle : Closeable {
     require(sink is FileHandleSink && sink.fileHandle === this) {
       "sink was not created by this FileHandle"
     }
+    check(!sink.closed) { "closed" }
 
     return sink.position + bufferSize
   }
 
+  /**
+   * Change the position of [sink] in the file to [position]. The argument [sink] must be either a
+   * sink produced by this file handle, or a [BufferedSink] that directly wraps such a sink. If the
+   * parameter is a [BufferedSink], it emits for buffered bytes.
+   */
   @Throws(IOException::class)
-  override fun close() {
+  fun reposition(sink: Sink, position: Long) {
+    if (sink is RealBufferedSink) {
+      val fileHandleSink = sink.sink
+      require(fileHandleSink is FileHandleSink && fileHandleSink.fileHandle === this) {
+        "sink was not created by this FileHandle"
+      }
+      check(!fileHandleSink.closed) { "closed" }
+
+      sink.emit()
+      fileHandleSink.position = position
+    } else {
+      require(sink is FileHandleSink && sink.fileHandle === this) {
+        "sink was not created by this FileHandle"
+      }
+      check(!sink.closed) { "closed" }
+      sink.position = position
+    }
+  }
+
+  @Throws(IOException::class)
+  final override fun close() {
     synchronized(this) {
       if (closed) return@close
       closed = true
       if (openStreamCount != 0) return@close
     }
-    closeInternal()
+    protectedClose()
   }
+
+  /** Like [read] but not performing any close check. */
+  @Throws(IOException::class)
+  protected abstract fun protectedRead(
+    fileOffset: Long,
+    array: ByteArray,
+    arrayOffset: Int,
+    byteCount: Int
+  ): Int
+
+  /** Like [write] but not performing any close check. */
+  @Throws(IOException::class)
+  protected abstract fun protectedWrite(
+    fileOffset: Long,
+    array: ByteArray,
+    arrayOffset: Int,
+    byteCount: Int
+  )
+
+  /** Like [flush] but not performing any close check. */
+  @Throws(IOException::class)
+  protected abstract fun protectedFlush()
+
+  /** Like [resize] but not performing any close check. */
+  @Throws(IOException::class)
+  protected abstract fun protectedResize(size: Long)
 
   /**
    * Subclasses should implement this to release resources held by this file handle. It is invoked
@@ -162,7 +318,62 @@ abstract class FileHandle : Closeable {
    * closed.
    */
   @Throws(IOException::class)
-  protected abstract fun closeInternal()
+  protected abstract fun protectedClose()
+
+  private fun readNoCloseCheck(fileOffset: Long, sink: Buffer, byteCount: Long): Long {
+    require(byteCount >= 0L) { "byteCount < 0: $byteCount" }
+
+    var currentOffset = fileOffset
+    val targetOffset = fileOffset + byteCount
+
+    while (currentOffset < targetOffset) {
+      val tail = sink.writableSegment(1)
+      val readByteCount = protectedRead(
+        fileOffset = currentOffset,
+        array = tail.data,
+        arrayOffset = tail.limit,
+        byteCount = minOf(targetOffset - currentOffset, Segment.SIZE - tail.limit).toInt()
+      )
+
+      if (readByteCount == -1) {
+        if (tail.pos == tail.limit) {
+          // We allocated a tail segment, but didn't end up needing it. Recycle!
+          sink.head = tail.pop()
+          SegmentPool.recycle(tail)
+        }
+        if (fileOffset == currentOffset) return -1L // We wanted bytes but didn't return any.
+        break
+      }
+
+      tail.limit += readByteCount
+      currentOffset += readByteCount
+      sink.size += readByteCount
+    }
+
+    return currentOffset - fileOffset
+  }
+
+  private fun writeNoCloseCheck(fileOffset: Long, source: Buffer, byteCount: Long) {
+    checkOffsetAndCount(source.size, 0L, byteCount)
+
+    var currentOffset = fileOffset
+    val targetOffset = fileOffset + byteCount
+
+    while (currentOffset < targetOffset) {
+      val head = source.head!!
+      val toCopy = minOf(targetOffset - currentOffset, head.limit - head.pos).toInt()
+      protectedWrite(currentOffset, head.data, head.pos, toCopy)
+
+      head.pos += toCopy
+      currentOffset += toCopy
+      source.size -= toCopy
+
+      if (head.pos == head.limit) {
+        source.head = head.pop()
+        SegmentPool.recycle(head)
+      }
+    }
+  }
 
   private class FileHandleSink(
     val fileHandle: FileHandle,
@@ -171,24 +382,26 @@ abstract class FileHandle : Closeable {
     var closed = false
 
     override fun write(source: Buffer, byteCount: Long) {
-      fileHandle.write(position, source, byteCount)
+      check(!closed) { "closed" }
+      fileHandle.writeNoCloseCheck(position, source, byteCount)
       position += byteCount
     }
 
     override fun flush() {
-      fileHandle.flush()
+      check(!closed) { "closed" }
+      fileHandle.protectedFlush()
     }
 
     override fun timeout() = Timeout.NONE
 
     override fun close() {
+      if (closed) return
+      closed = true
       synchronized(fileHandle) {
-        if (closed) return@close
-        closed = true
         fileHandle.openStreamCount--
         if (fileHandle.openStreamCount != 0 || !fileHandle.closed) return@close
       }
-      fileHandle.closeInternal()
+      fileHandle.protectedClose()
     }
   }
 
@@ -199,7 +412,8 @@ abstract class FileHandle : Closeable {
     var closed = false
 
     override fun read(sink: Buffer, byteCount: Long): Long {
-      val result = fileHandle.read(position, sink, byteCount)
+      check(!closed) { "closed" }
+      val result = fileHandle.readNoCloseCheck(position, sink, byteCount)
       if (result != -1L) position += result
       return result
     }
@@ -207,13 +421,13 @@ abstract class FileHandle : Closeable {
     override fun timeout() = Timeout.NONE
 
     override fun close() {
+      if (closed) return
+      closed = true
       synchronized(fileHandle) {
-        if (closed) return@close
-        closed = true
         fileHandle.openStreamCount--
         if (fileHandle.openStreamCount != 0 || !fileHandle.closed) return@close
       }
-      fileHandle.closeInternal()
+      fileHandle.protectedClose()
     }
   }
 }

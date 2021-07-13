@@ -3,6 +3,7 @@ import ru.vyarus.gradle.plugin.animalsniffer.AnimalSnifferExtension
 plugins {
   kotlin("multiplatform")
   id("ru.vyarus.animalsniffer")
+  id("org.jetbrains.dokka")
 }
 
 kotlin {
@@ -30,6 +31,8 @@ kotlin {
   if (kmpNativeEnabled) {
     iosX64()
     iosArm64()
+    tvosX64()
+    tvosArm64()
     watchosArm32()
     watchosArm64()
     watchosX86()
@@ -78,4 +81,4 @@ dependencies {
   signature(deps.animalSniffer.javaSignature)
 }
 
-apply(from = "$rootDir/gradle/gradle-mvn-mpp-push.gradle")
+apply(plugin = "okio-publishing")

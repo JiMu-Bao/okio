@@ -1,6 +1,49 @@
 Change Log
 ==========
 
+## Version 3.0.0-alpha.8
+
+_2021-07-13_
+
+ * Fix: Don't crash on duplicate entries in a .zip file.
+ * Fix: Change `FileSystem.RESOURCES` to initialize itself lazily.
+
+
+## Version 3.0.0-alpha.7
+
+_2021-07-12_
+
+ * Fix: Change `ResourceFileSystem` to load roots eagerly. We had a bug where `list()` on the root
+   returned an empty list even if resources were present.
+ * New: `FileHandle.reposition()` can seek on a source or sink returned by that `FileHandle`.
+ * New: Move the system resources instance to `FileSystem.RESOURCES`.
+ * Upgrade: [Kotlin 1.5.20][kotlin_1_5_20].
+
+
+## Version 3.0.0-alpha.6
+
+_2021-06-01_
+
+ * New: `FileHandle` supports random access reads, writes, and resizes on files. Create an instance
+   with `FileSystem.openReadOnly()` or `FileSystem.openReadWrite()`.
+ * New: Remove `Cursor` which is obsoleted by `FileHandle`. (`UnsafeCursor` is still around!)
+ * New: Add support for the new intermediate representation (IR) artifacts in Kotlin/JS. We still
+   support the legacy artifact format.
+ * New: Support tvOS (tvosArm64, tvosX64) in multiplatform.
+ * New: Change `ResourceFileSystem` to omit `.class` files when indexing `.zip` files. We expect
+   this to lower the memory footprint of `ResourceFileSystem`. 
+ * Fix: Don't crash on background thread access in Kotlin/Native. We had to apply `@SharedImmutable`
+   and run our test suite on a background thread.
+
+
+## Version 3.0.0-alpha.5
+
+_2021-04-27_
+
+ * New: Promote the `ZipFileSystem` and `ResourceFileSystem` to the main Okio module. These are
+   currently JVM-only. The `okio-zipfilesystem` module is no longer published.
+
+
 ## Version 3.0.0-alpha.4
 
 _2021-04-14_
@@ -634,7 +677,8 @@ _2014-04-08_
 
 
  [gradle_metadata]: https://blog.gradle.org/gradle-metadata-1.0
- [kotlin_1_4_20]: https://github.com/JetBrains/kotlin/releases/tag/v1.4.20 
- [kotlin_1_4_10]: https://github.com/JetBrains/kotlin/releases/tag/v1.4.10 
+ [kotlin_1_4_10]: https://github.com/JetBrains/kotlin/releases/tag/v1.4.10
+ [kotlin_1_4_20]: https://github.com/JetBrains/kotlin/releases/tag/v1.4.20
+ [kotlin_1_5_20]: https://github.com/JetBrains/kotlin/releases/tag/v1.5.20
  [maven_provided]: https://maven.apache.org/guides/introduction/introduction-to-dependency-mechanism.html
  [xor_utf8]: https://github.com/square/okio/blob/bbb29c459e5ccf0f286e0b17ccdcacd7ac4bc2a9/okio/src/main/kotlin/okio/Utf8.kt#L302

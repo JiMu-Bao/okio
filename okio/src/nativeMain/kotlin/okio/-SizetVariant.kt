@@ -27,7 +27,7 @@ internal expect fun variantFread(
 ): UInt
 
 internal expect fun variantFwrite(
-  target: CPointer<ByteVar>,
+  source: CPointer<ByteVar>,
   byteCount: UInt,
   file: CPointer<FILE>
 ): UInt

@@ -8,22 +8,21 @@
 
 set -ex
 
-REPO="git@github.com:square/okio.git"	
-DIR=temp-clone	
+DIR=temp-clone
 
 # Delete any existing temporary website clone	
 rm -rf $DIR	
 
 # Clone the current repo into temp folder	
-git clone $REPO $DIR	
+git clone . $DIR
 
 # Move working directory into temp folder	
 cd $DIR
 
 # Restore Javadocs from 1.x	
-git checkout gh-pages	
-git cherry-pick b3205fa199a19d6fbf13ee5c8e0c3d6d2b15b05f	
-git push	
+git checkout b3205fa199a19d6fbf13ee5c8e0c3d6d2b15b05f
+mkdir -p ../site
+mv ./1.x ../site/1.x
 
 # Delete our temp folder	
 cd ..	

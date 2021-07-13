@@ -1,4 +1,5 @@
 site_name: Okio
+site_url: https://square.github.io/okio
 repo_name: Okio
 repo_url: https://github.com/square/okio
 site_description: "A modern I/O library for Android, Kotlin, and Java."

@@ -28,8 +28,10 @@ import okio.decodeBase64ToArray
 import okio.encodeBase64
 import okio.isIsoControl
 import okio.processUtf8CodePoints
+import okio.resolveDefaultParameter
 import okio.shr
 import okio.toUtf8String
+import kotlin.native.concurrent.SharedImmutable
 
 // TODO Kotlin's expect classes can't have default implementations, so platform implementations
 // have to call these functions. Remove all this nonsense when expect class allow actual code.
@@ -51,6 +53,7 @@ internal inline fun ByteString.commonBase64(): String = data.encodeBase64()
 @Suppress("NOTHING_TO_INLINE")
 internal inline fun ByteString.commonBase64Url() = data.encodeBase64(map = BASE64_URL_SAFE)
 
+@SharedImmutable
 internal val HEX_DIGIT_CHARS =
   charArrayOf('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f')
 
@@ -62,7 +65,7 @@ internal inline fun ByteString.commonHex(): String {
     result[c++] = HEX_DIGIT_CHARS[b shr 4 and 0xf]
     result[c++] = HEX_DIGIT_CHARS[b       and 0xf] // ktlint-disable no-multi-spaces
   }
-  return String(result)
+  return result.concatToString()
 }
 
 @Suppress("NOTHING_TO_INLINE")
@@ -123,6 +126,7 @@ internal inline fun ByteString.commonToAsciiUppercase(): ByteString {
 
 @Suppress("NOTHING_TO_INLINE")
 internal inline fun ByteString.commonSubstring(beginIndex: Int, endIndex: Int): ByteString {
+  val endIndex = resolveDefaultParameter(endIndex)
   require(beginIndex >= 0) { "beginIndex < 0" }
   require(endIndex <= data.size) { "endIndex > length(${data.size})" }
 
@@ -204,6 +208,7 @@ internal inline fun ByteString.commonLastIndexOf(
 
 @Suppress("NOTHING_TO_INLINE")
 internal inline fun ByteString.commonLastIndexOf(other: ByteArray, fromIndex: Int): Int {
+  val fromIndex = resolveDefaultParameter(fromIndex)
   val limit = data.size - other.size
   for (i in minOf(fromIndex, limit) downTo 0) {
     if (arrayRangeEquals(data, i, other, 0, other.size)) {

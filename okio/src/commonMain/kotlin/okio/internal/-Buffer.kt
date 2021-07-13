@@ -23,7 +23,6 @@ import okio.ArrayIndexOutOfBoundsException
 import okio.Buffer
 import okio.Buffer.UnsafeCursor
 import okio.ByteString
-import okio.Cursor
 import okio.EOFException
 import okio.Options
 import okio.REPLACEMENT_CODE_POINT
@@ -36,8 +35,11 @@ import okio.and
 import okio.asUtf8ToByteArray
 import okio.checkOffsetAndCount
 import okio.minOf
+import okio.resolveDefaultParameter
 import okio.toHexString
+import kotlin.native.concurrent.SharedImmutable
 
+@SharedImmutable
 internal val HEX_DIGIT_BYTES = "0123456789abcdef".asUtf8ToByteArray()
 
 // Threshold determined empirically via ReadByteStringBenchmark
@@ -1508,6 +1510,7 @@ internal inline fun Buffer.commonSnapshot(byteCount: Int): ByteString {
 }
 
 internal fun Buffer.commonReadUnsafe(unsafeCursor: UnsafeCursor): UnsafeCursor {
+  val unsafeCursor = resolveDefaultParameter(unsafeCursor)
   check(unsafeCursor.buffer == null) { "already attached to a buffer" }
 
   unsafeCursor.buffer = this
@@ -1516,6 +1519,7 @@ internal fun Buffer.commonReadUnsafe(unsafeCursor: UnsafeCursor): UnsafeCursor {
 }
 
 internal fun Buffer.commonReadAndWriteUnsafe(unsafeCursor: UnsafeCursor): UnsafeCursor {
+  val unsafeCursor = resolveDefaultParameter(unsafeCursor)
   check(unsafeCursor.buffer == null) { "already attached to a buffer" }
 
   unsafeCursor.buffer = this
@@ -1686,24 +1690,4 @@ internal inline fun UnsafeCursor.commonClose() {
   data = null
   start = -1
   end = -1
-}
-
-internal class BufferedSourceCursor(
-  private val buffer: Buffer,
-  private val sourceCursor: Cursor
-) : Cursor {
-  override fun position(): Long = sourceCursor.position() - buffer.size
-
-  override fun size(): Long = sourceCursor.size()
-
-  override fun seek(position: Long) {
-    val sourcePosition = sourceCursor.position()
-    val bufferSize = buffer.size
-    if (position in (sourcePosition - bufferSize)..sourcePosition) {
-      buffer.skip(bufferSize - sourcePosition + position)
-    } else {
-      buffer.clear()
-      sourceCursor.seek(position)
-    }
-  }
 }

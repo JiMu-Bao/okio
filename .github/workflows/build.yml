@@ -99,10 +99,11 @@ jobs:
 
       - name: Upload Artifacts
         run: |
-          ./gradlew clean publish
+          ./gradlew clean publish --stacktrace
         env:
-          ORG_GRADLE_PROJECT_SONATYPE_NEXUS_USERNAME: ${{ secrets.SONATYPE_NEXUS_USERNAME }}
-          ORG_GRADLE_PROJECT_SONATYPE_NEXUS_PASSWORD: ${{ secrets.SONATYPE_NEXUS_PASSWORD }}
+          ORG_GRADLE_PROJECT_mavenCentralRepositoryUsername: ${{ secrets.SONATYPE_NEXUS_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralRepositoryPassword: ${{ secrets.SONATYPE_NEXUS_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingKey: ${{ secrets.ARTIFACT_SIGNING_PRIVATE_KEY }}
 
   publish-windows:
     runs-on: windows-latest
@@ -120,10 +121,11 @@ jobs:
 
       - name: Upload Artifacts
         run: |
-          ./gradlew clean publishMingwX64PublicationToMavenRepository
+          ./gradlew clean publishMingwX64PublicationToMavenRepository --stacktrace
         env:
-          ORG_GRADLE_PROJECT_SONATYPE_NEXUS_USERNAME: ${{ secrets.SONATYPE_NEXUS_USERNAME }}
-          ORG_GRADLE_PROJECT_SONATYPE_NEXUS_PASSWORD: ${{ secrets.SONATYPE_NEXUS_PASSWORD }}
+          ORG_GRADLE_PROJECT_mavenCentralRepositoryUsername: ${{ secrets.SONATYPE_NEXUS_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralRepositoryPassword: ${{ secrets.SONATYPE_NEXUS_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingKey: ${{ secrets.ARTIFACT_SIGNING_PRIVATE_KEY }}
 
   publish-website:
     runs-on: ubuntu-latest
@@ -133,6 +135,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
 
       - name: Configure JDK
         uses: actions/setup-java@v1
@@ -149,8 +153,11 @@ jobs:
 
       - name: Build mkdocs
         run: |
-          pip3 install mkdocs-macros-plugin
+          pip3 install mkdocs-material mkdocs-macros-plugin
           mkdocs build
+
+      - name: Restore 1.x docs
+        run: .buildscript/restore_v1_docs.sh
 
       - name: Deploy docs
         if: success()

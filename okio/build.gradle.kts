@@ -1,9 +1,13 @@
 import aQute.bnd.gradle.BundleTaskConvention
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTargetWithTests
+import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
+import org.jetbrains.kotlin.gradle.plugin.mpp.TestExecutable
 import ru.vyarus.gradle.plugin.animalsniffer.AnimalSnifferExtension
 
 plugins {
   kotlin("multiplatform")
   id("ru.vyarus.animalsniffer")
+  id("org.jetbrains.dokka")
 }
 
 /*
@@ -20,6 +24,8 @@ plugins {
  *       |   |   |-- iosArm64
  *       |   |   |-- iosX64
  *       |   |   |-- macosX64
+ *       |   |   |-- tvosArm64
+ *       |   |   |-- tvosX64
  *       |   |   |-- watchosArm32
  *       |   |   |-- watchosArm64
  *       |   |   '-- watchosX86
@@ -34,7 +40,7 @@ plugins {
  *  * `sizet32` for watchOS, including watchOS 64-bit architectures
  *  * `sizet64` for everything else
  *
- * The `nonJvm` and `nonJs` source sets exist and exclude a platform.
+ * The `nonJvm` source set excludes that platform.
  *
  * The `hashFunctions` source set builds on all platforms. It ships as a main source set on non-JVM
  * platforms and as a test source set on the JVM platform.
@@ -64,6 +70,8 @@ kotlin {
   if (kmpNativeEnabled) {
     iosX64()
     iosArm64()
+    tvosX64()
+    tvosArm64()
     watchosArm32()
     watchosArm64()
     watchosX86()
@@ -93,14 +101,11 @@ kotlin {
         implementation(project(":okio-fakefilesystem"))
       }
     }
-    val nonJsMain by creating {
-    }
     val nonJvmMain by creating {
       kotlin.srcDir("src/hashFunctions/kotlin")
     }
 
     val jvmMain by getting {
-      dependsOn(nonJsMain)
       dependencies {
         api(deps.kotlin.stdLib.jdk8)
         compileOnly(deps.animalSniffer.annotations)
@@ -132,7 +137,6 @@ kotlin {
 
     if (kmpNativeEnabled) {
       val nativeMain by creating {
-        dependsOn(nonJsMain)
         dependsOn(nonJvmMain)
       }
       val nativeTest by creating {
@@ -169,7 +173,9 @@ kotlin {
       val iosX64Main by getting {}
       val iosArm64Main by getting {}
       val macosX64Main by getting {}
-      for (it in listOf(iosX64Main, iosArm64Main, macosX64Main)) {
+      val tvosX64Main by getting {}
+      val tvosArm64Main by getting {}
+      for (it in listOf(iosX64Main, iosArm64Main, macosX64Main, tvosX64Main, tvosArm64Main)) {
         it.dependsOn(sizet64Main)
         it.dependsOn(appleMain)
       }
@@ -177,7 +183,9 @@ kotlin {
       val iosX64Test by getting {}
       val iosArm64Test by getting {}
       val macosX64Test by getting {}
-      for (it in listOf(iosX64Test, iosArm64Test, macosX64Test)) {
+      val tvosX64Test by getting {}
+      val tvosArm64Test by getting {}
+      for (it in listOf(iosX64Test, iosArm64Test, macosX64Test, tvosX64Test, tvosArm64Test)) {
         it.dependsOn(appleTest)
       }
 
@@ -207,6 +215,20 @@ kotlin {
       }
       val linuxX64Test by getting {
         dependsOn(nativeTest)
+      }
+    }
+  }
+
+  targets.withType<KotlinNativeTargetWithTests<*>> {
+    binaries {
+      // Configure a separate test where code runs in background
+      test("background", setOf(NativeBuildType.DEBUG)) {
+        freeCompilerArgs += "-trw"
+      }
+    }
+    testRuns {
+      val background by creating {
+        setExecutionSourceFrom(binaries.getByName("backgroundDebugTest") as TestExecutable)
       }
     }
   }
@@ -241,4 +263,4 @@ dependencies {
   signature(deps.animalSniffer.javaSignature)
 }
 
-apply(from = "$rootDir/gradle/gradle-mvn-mpp-push.gradle")
+apply(plugin = "okio-publishing")

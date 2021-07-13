@@ -14,20 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package okio.zipfilesystem
+package okio
 
-import okio.ExperimentalFileSystem
-import okio.FileHandle
-import okio.FileMetadata
-import okio.FileSystem
-import okio.InflaterSource
-import okio.Path
 import okio.Path.Companion.toPath
-import okio.Sink
-import okio.Source
-import okio.buffer
+import okio.internal.COMPRESSION_METHOD_STORED
+import okio.internal.FixedLengthSource
+import okio.internal.ZipEntry
+import okio.internal.readLocalHeader
+import okio.internal.skipLocalHeader
 import java.io.FileNotFoundException
-import java.io.IOException
 import java.util.zip.Inflater
 
 /**
@@ -95,14 +90,18 @@ class ZipFileSystem internal constructor(
       return basicMetadata
     }
 
-    val source = fileSystem.source(zipPath).buffer()
-    val cursor = source.cursor()!!
-    cursor.seek(entry.offset)
+    val source = fileSystem.openReadOnly(zipPath).use { fileHandle ->
+      fileHandle.source(entry.offset).buffer()
+    }
     return source.readLocalHeader(basicMetadata)
   }
 
-  override fun open(file: Path): FileHandle {
+  override fun openReadOnly(file: Path): FileHandle {
     throw UnsupportedOperationException("not implemented yet!")
+  }
+
+  override fun openReadWrite(file: Path): FileHandle {
+    throw IOException("zip entries are not writable")
   }
 
   override fun list(dir: Path): List<Path> {
@@ -115,10 +114,9 @@ class ZipFileSystem internal constructor(
   override fun source(path: Path): Source {
     val canonicalPath = canonicalize(path)
     val entry = entries[canonicalPath] ?: throw FileNotFoundException("no such file: $path")
-    val source = fileSystem.source(zipPath).buffer()
-    val cursor = source.cursor()!!
-
-    cursor.seek(entry.offset)
+    val source = fileSystem.openReadOnly(zipPath).use { fileHandle ->
+      fileHandle.source(entry.offset).buffer()
+    }
     source.skipLocalHeader()
 
     return when (entry.compressionMethod) {
@@ -147,11 +145,4 @@ class ZipFileSystem internal constructor(
     throw IOException("zip file systems are read-only")
 
   override fun delete(path: Path): Unit = throw IOException("zip file systems are read-only")
-
-  companion object {
-    @Throws(IOException::class)
-    @ExperimentalFileSystem
-    @JvmStatic @JvmName("open")
-    fun FileSystem.openZip(zipPath: Path): ZipFileSystem = open(zipPath, this)
-  }
 }

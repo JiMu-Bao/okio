@@ -20,7 +20,6 @@ import okio.internal.commonCreateDirectories
 import okio.internal.commonDeleteRecursively
 import okio.internal.commonExists
 import okio.internal.commonMetadata
-import kotlin.jvm.JvmField
 
 @ExperimentalFileSystem
 actual abstract class FileSystem {
@@ -40,7 +39,10 @@ actual abstract class FileSystem {
   actual abstract fun list(dir: Path): List<Path>
 
   @Throws(IOException::class)
-  actual abstract fun open(file: Path): FileHandle
+  actual abstract fun openReadOnly(file: Path): FileHandle
+
+  @Throws(IOException::class)
+  actual abstract fun openReadWrite(file: Path): FileHandle
 
   @Throws(IOException::class)
   actual abstract fun source(file: Path): Source
@@ -89,10 +91,8 @@ actual abstract class FileSystem {
      * The current process's host file system. Use this instance directly, or dependency inject a
      * [FileSystem] to make code testable.
      */
-    @JvmField
-    val SYSTEM: FileSystem = PLATFORM_FILE_SYSTEM
+    val SYSTEM: FileSystem = PosixFileSystem
 
-    @JvmField
     actual val SYSTEM_TEMPORARY_DIRECTORY: Path = PLATFORM_TEMPORARY_DIRECTORY
   }
 }

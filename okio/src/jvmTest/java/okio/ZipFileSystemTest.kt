@@ -1,22 +1,32 @@
-package okio.zipfilesystem
+/*
+ * Copyright (C) 2021 Square, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package okio
 
 import kotlinx.datetime.Instant
-import okio.ByteString.Companion.toByteString
-import okio.ExperimentalFileSystem
-import okio.FileSystem
-import okio.IOException
+import okio.ByteString.Companion.encodeUtf8
 import okio.Path.Companion.toPath
-import okio.zipfilesystem.ZipFileSystem.Companion.openZip
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.Before
 import org.junit.Test
-import kotlin.random.Random
 import kotlin.test.assertFailsWith
 
 @ExperimentalFileSystem
 class ZipFileSystemTest {
   private val fileSystem = FileSystem.SYSTEM
-  private var base = FileSystem.SYSTEM_TEMPORARY_DIRECTORY / randomToken()
+  private var base = FileSystem.SYSTEM_TEMPORARY_DIRECTORY / randomToken(16)
 
   @Before
   fun setUp() {
@@ -381,10 +391,55 @@ class ZipFileSystemTest {
       fileSystem.openZip(zipPath)
     }
   }
+
+  /**
+   * The zip format permits multiple files with the same names. For example,
+   * `kotlin-gradle-plugin-1.5.20.jar` contains two copies of
+   * `META-INF/kotlin-gradle-statistics.kotlin_module`.
+   *
+   * We used to crash on duplicates, but they are common in practice so now we prefer the last
+   * entry. This behavior is consistent with both [java.util.zip.ZipFile] and
+   * [java.nio.file.FileSystem].
+   */
+  @Test
+  fun filesOverlap() {
+    val zipPath = ZipBuilder(base)
+      .addEntry("hello.txt", "This is the first hello.txt")
+      .addEntry("xxxxx.xxx", "This is the second hello.txt")
+      .build()
+    val original = fileSystem.read(zipPath) { readByteString() }
+    val rewritten = original.replaceAll("xxxxx.xxx".encodeUtf8(), "hello.txt".encodeUtf8())
+    fileSystem.write(zipPath) { write(rewritten) }
+
+    val zipFileSystem = fileSystem.openZip(zipPath)
+    assertThat(zipFileSystem.read("hello.txt".toPath()) { readUtf8() })
+      .isEqualTo("This is the second hello.txt")
+    assertThat(zipFileSystem.list("/".toPath()))
+      .containsExactly("/hello.txt".toPath())
+  }
+}
+
+private fun ByteString.replaceAll(a: ByteString, b: ByteString): ByteString {
+  val buffer = Buffer()
+  buffer.write(this)
+  buffer.replace(a, b)
+  return buffer.readByteString()
+}
+
+private fun Buffer.replace(a: ByteString, b: ByteString) {
+  val result = Buffer()
+  while (!exhausted()) {
+    val index = indexOf(a)
+    if (index == -1L) {
+      result.writeAll(this)
+    } else {
+      result.write(this, index)
+      result.write(b)
+      skip(a.size.toLong())
+    }
+  }
+  writeAll(result)
 }
 
 /** Decodes this ISO8601 time string. */
 fun String.toEpochMillis() = Instant.parse(this).toEpochMilliseconds()
-
-@JvmOverloads
-fun randomToken(length: Int = 16) = Random.nextBytes(length).toByteString().hex()

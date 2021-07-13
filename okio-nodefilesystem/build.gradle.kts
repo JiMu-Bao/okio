@@ -1,5 +1,6 @@
 plugins {
   kotlin("multiplatform")
+  id("org.jetbrains.dokka")
 }
 
 kotlin {
@@ -47,4 +48,4 @@ kotlin {
   }
 }
 
-apply(from = "$rootDir/gradle/gradle-mvn-mpp-push.gradle")
+apply(plugin = "okio-publishing")
